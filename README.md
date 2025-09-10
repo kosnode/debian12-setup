@@ -14,4 +14,4 @@
 在新的 Debian 12 VPS 上执行以下命令即可：
 
 ```bash
-sudo bash <(curl -fsSL sys.kosno.de)
+bash <(curl -fsSL sys.kosno.de)
