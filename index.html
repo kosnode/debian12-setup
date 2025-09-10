@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+set -e
+
+# ========================================
+# Debian 12 VPS 一键初始化脚本
+# 功能：
+#   - 用户创建 & sudo 权限
+#   - SSH 公钥配置
+#   - SSH 配置（修改端口、禁止 root 密码登录）
+#   - 系统更新升级
+#   - ufw 防火墙配置
+#   - 开启 BBR
+# 使用方法：
+#   sudo bash <(curl -fsSL sys.kosno.de)
+# ========================================
+
+# --- 1. 输入目标用户名 ---
+read -rp "请输入要创建的用户名: " TARGET_USER
+if id "$TARGET_USER" &>/dev/null; then
+    echo "用户 $TARGET_USER 已存在"
+else
+    adduser --gecos "" "$TARGET_USER"
+    usermod -aG sudo "$TARGET_USER"
+fi
+
+# --- 2. 配置 sudo 无需密码 ---
+SUDOERS_LINE="$TARGET_USER ALL=(ALL) NOPASSWD:ALL"
+if ! grep -Fxq "$SUDOERS_LINE" /etc/sudoers; then
+    echo "$SUDOERS_LINE" | sudo tee -a /etc/sudoers
+fi
+
+# --- 3. 配置 SSH Key ---
+SSH_DIR="/home/$TARGET_USER/.ssh"
+mkdir -p "$SSH_DIR"
+chmod 700 "$SSH_DIR"
+chown "$TARGET_USER":"$TARGET_USER" "$SSH_DIR"
+
+if [ -f "/root/.ssh/authorized_keys" ]; then
+    cp /root/.ssh/authorized_keys "$SSH_DIR/"
+    chown "$TARGET_USER":"$TARGET_USER" "$SSH_DIR/authorized_keys"
+    chmod 600 "$SSH_DIR/authorized_keys"
+else
+    echo "请粘贴 $TARGET_USER 的 SSH 公钥（回车结束）:"
+    read -r PUB_KEY
+    echo "$PUB_KEY" >> "$SSH_DIR/authorized_keys"
+    chown "$TARGET_USER":"$TARGET_USER" "$SSH_DIR/authorized_keys"
+    chmod 600 "$SSH_DIR/authorized_keys"
+fi
+
+# --- 4. 修改 sshd_config ---
+SSH_PORT_DEFAULT=22
+read -rp "请输入新的 SSH 端口 (默认22): " SSH_PORT
+SSH_PORT=${SSH_PORT:-$SSH_PORT_DEFAULT}
+
+SSHD_CONFIG="/etc/ssh/sshd_config"
+cp "$SSHD_CONFIG" "${SSHD_CONFIG}.bak"
+
+sed -i "s/^#Port .*/Port $SSH_PORT/" "$SSHD_CONFIG" || echo "Port $SSH_PORT" >> "$SSHD_CONFIG"
+sed -i "s/^#PubkeyAuthentication .*/PubkeyAuthentication yes/" "$SSHD_CONFIG" || echo "PubkeyAuthentication yes" >> "$SSHD_CONFIG"
+sed -i "s/^PasswordAuthentication .*/PasswordAuthentication no/" "$SSHD_CONFIG" || echo "PasswordAuthentication no" >> "$SSHD_CONFIG"
+sed -i "s/^PermitRootLogin .*/PermitRootLogin no/" "$SSHD_CONFIG" || echo "PermitRootLogin no" >> "$SSHD_CONFIG"
+
+systemctl restart ssh
+
+# --- 5. 系统更新升级 ---
+apt update && apt full-upgrade -y && apt autoremove -y
+
+# --- 6. 安装 ufw ---
+apt install ufw -y
+
+# --- 7. 用户自定义防火墙端口 ---
+read -rp "请输入要允许的 TCP/UDP 端口，逗号分隔（例：22,80,443）: " ALLOW_PORTS
+
+# 添加 ufw 规则
+IFS=',' read -ra PORT_ARRAY <<< "$ALLOW_PORTS"
+for port in "${PORT_ARRAY[@]}"; do
+    ufw allow "$port"/tcp
+    ufw allow "$port"/udp
+done
+
+# 启动 ufw
+ufw --force enable
+
+# --- 8. 开启 BBR ---
+echo "net.core.default_qdisc=fq" | tee -a /etc/sysctl.conf
+echo "net.ipv4.tcp_congestion_control=bbr" | tee -a /etc/sysctl.conf
+sysctl -p
+
+# --- 完成提示 ---
+echo "=================================================="
+echo "初始化完成！"
+echo "用户名：$TARGET_USER"
+echo "SSH端口：$SSH_PORT"
+echo "已允许端口：$ALLOW_PORTS"
+echo "请使用公钥登录，root已禁用密码登录。"
+echo "=================================================="
