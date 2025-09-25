@@ -15,3 +15,8 @@
 
 ```bash
 bash <(curl -fsSL sys.kosno.de)
+```
+
+检查主机名
+```bash
+sudo nano /etc/hosts
